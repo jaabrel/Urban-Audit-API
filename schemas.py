@@ -14,6 +14,7 @@ class LoginResponse(BaseModel):
     access_token: str
     token_type: str
     userId: int
+    role: str
 # --- Ocorrências ---
 class OcorrenciaBase(BaseModel):
     # Validações estritas de tamanho e valores (Requisito da Avaliação)

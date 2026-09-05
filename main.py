@@ -1,10 +1,81 @@
 from fastapi import FastAPI, Depends, HTTPException, status
 from sqlalchemy.orm import Session
 from typing import List
+
 import models, schemas, auth
-from database import engine, get_db
+from database import engine, get_db, SessionLocal
 # Cria o ficheiro base de dados e as tabelas assim que a API arranca
 models.Base.metadata.create_all(bind=engine)
+
+def fazer_seed_da_base_de_dados():
+    db = SessionLocal()
+
+    try:
+        if db.query(models.User).count() == 0:
+            print("A base de dados está vazia. Seed inicial...")
+
+            admin = models.User(
+                    email="admin@ipt.pt",
+                    hashed_password=auth.get_password_hash("admin123"),
+                    role="admin"
+                    )
+            
+            # 2. Criar Utilizador Normal
+            aluno = models.User(
+                email="aluno@ipt.pt",
+                hashed_password=auth.get_password_hash("aluno123"),
+                role="user"
+            )
+            
+            # Guarda os utilizadores na base de dados
+            db.add(admin)
+            db.add(aluno)
+            db.commit()
+            
+            # O refresh serve para obtermos os IDs reais (1 e 2) que a base de dados lhes atribuiu
+            db.refresh(admin)
+            db.refresh(aluno)
+            # 3. Criar Ocorrências que pareçam reais (usando coordenadas de Tomar)
+            ocorrencia1 = models.Ocorrencia(
+                titulo="Buraco profundo na estrada",
+                descricao="Abatimento acentuado do piso junto à passadeira. Muito perigoso para pneus de motociclos.",
+                latitude=39.6042,
+                longitude=-8.4116,
+                fotoBase64="simulacao_base_64_imagem_estrada",
+                estado="Aberto",
+                owner_id=aluno.id # Esta foi reportada pelo aluno
+            )
+            
+            ocorrencia2 = models.Ocorrencia(
+                titulo="Sinal de Stop caído",
+                descricao="O vento derrubou o sinal de stop no cruzamento. Requer intervenção urgente.",
+                latitude=39.6055,
+                longitude=-8.4100,
+                fotoBase64="simulacao_base_64_imagem_sinal", 
+                estado="Aberto",
+                owner_id=aluno.id # Também reportada pelo aluno
+            )
+            ocorrencia3 = models.Ocorrencia(
+                titulo="Papeleira a transbordar",
+                descricao="Lixo espalhado pelo passeio na rua principal. Já foi limpo pelos serviços camarários.",
+                latitude=39.6065,
+                longitude=-8.4120,
+                fotoBase64="simulacao_base_64_imagem_lixo", 
+                estado="Resolvido",
+                owner_id=admin.id # Esta foi reportada/editada pelo admin e está Resolvida
+            )
+            
+            # Guardar todas as ocorrências de uma vez
+            db.add_all([ocorrencia1, ocorrencia2, ocorrencia3])
+            db.commit()
+            print("Seed concluído com sucesso!")
+        else:
+            print("A base de dados já tem dados. Seed ignorado.")
+    finally:
+        db.close()
+
+fazer_seed_da_base_de_dados()
+
 app = FastAPI(
     title="Urban Audit API",
     description="API REST para gestão de ocorrências urbanas",
@@ -35,7 +106,7 @@ def login(user: schemas.UserCreate, db: Session = Depends(get_db)):
     
     # Devolve o Token
     access_token = auth.create_access_token(data={"sub": str(db_user.id)})
-    return {"access_token": access_token, "token_type": "bearer", "userId": db_user.id}
+    return {"access_token": access_token, "token_type": "bearer", "userId": db_user.id, "role": db_user.role}
 # ==========================================
 # ENDPOINTS DE OCORRÊNCIAS (CRUD)
 # ==========================================
@@ -71,7 +142,7 @@ def editar_ocorrencia(
         raise HTTPException(status_code=404, detail="Ocorrência não encontrada")
     
     # CONTROLO DE ACESSO: O utilizador atual é o dono desta ocorrência?
-    if db_ocorrencia.owner_id != current_user.id:
+    if db_ocorrencia.owner_id != current_user.id and current_user.role != "admin":
         raise HTTPException(status_code=403, detail="Não tens permissão para editar esta ocorrência")
     
     # Atualiza apenas os campos enviados
@@ -94,7 +165,7 @@ def remover_ocorrencia(
         raise HTTPException(status_code=404, detail="Ocorrência não encontrada")
         
     # CONTROLO DE ACESSO: Apenas o dono pode apagar
-    if db_ocorrencia.owner_id != current_user.id:
+    if db_ocorrencia.owner_id != current_user.id and current_user.role != "admin":
         raise HTTPException(status_code=403, detail="Não tens permissão para apagar esta ocorrência")
         
     db.delete(db_ocorrencia)
